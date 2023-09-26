@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
+
 	_ "github.com/go-sql-driver/mysql"
 )
 
@@ -104,7 +106,6 @@ func init() {
 	if err != nil {
 		panic(err)
 	}
-
 	log.SetOutput(f)
 }
 
