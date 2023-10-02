@@ -6,10 +6,13 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"io"
 	"strings"
 	"time"
+	"errors"
+	"encoding/json"
 
-	"github.com/golang-jwt/jwt/v5"
+	_ "github.com/golang-jwt/jwt/v5"
 
 	_ "github.com/go-sql-driver/mysql"
 )
@@ -18,21 +21,112 @@ type context struct {
 	db *sql.DB
 }
 
+/*
+response {
+	data: {} || [{}, {}],
+	error: {},
+}
+data: {
+	items: []
+	items_count: 0
+	items_per_page: 0
+	items_total: 0
+	page_index: 0
+	page_total: 0
+}
+
+error: {
+	code: 400
+	errors: [{message: "something"}]
+}
+*/
+
+type apiResponse struct {
+	Data any `json:"data,omitempty"`
+	DataMany any `json:"data,omitempty"`
+	Error apiError `json:"error,omitempty"`
+}
+
+type apiError struct {
+	Code int `json:"code"`
+	Errors []apiErrorValue `json:"errors"`
+}
+
+type apiErrorValue struct {
+	Message string `json:"message"`
+}
+
+func writeErr(w http.ResponseWriter, status int, msg string) {
+	var res apiResponse
+
+	res.Error.Code = status
+	res.Error.Errors = append(res.Error.Errors, apiErrorValue{msg})
+
+	b, err := json.Marshal(res)
+	if err != nil {
+		panic(err)
+	}
+
+	w.WriteHeader(status)
+	w.Write(b)
+}
+
+func writeServerErr(w http.ResponseWriter, err error) {
+	log.Print(err)
+	writeErr(w, http.StatusInternalServerError, "internal server error")
+}
+
 func (ctx context) login(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		w.WriteHeader(http.StatusMethodNotAllowed)
+		writeErr(w, http.StatusMethodNotAllowed, "invalid method")
 		w.Header().Set("allow", http.MethodPost)
 		return
 	}
 
 	if r.Header.Get("content-type") != "application/json" {
-		w.WriteHeader(http.StatusBadRequest)
+		writeErr(w, http.StatusUnsupportedMediaType, "invalid content type")
 		return
 	}
 
 	w.Header().Set("content-type", "application/json")
 
-	fmt.Fprintln(w, "hello, from login")
+	b, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeServerErr(w, err)
+		return
+	}
+
+	body := struct{
+		Username string
+		Password string
+	}{}
+
+	if err := json.Unmarshal(b, &body); err != nil {
+		var umarsherr *json.InvalidUnmarshalError
+		if errors.As(err, &umarsherr) {
+			writeServerErr(w, err)
+			return
+		}
+
+		writeErr(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+
+	body.Username = strings.TrimSpace(body.Username)
+	body.Password = strings.TrimSpace(body.Password)
+
+	if body.Username == "" {
+		writeErr(w, http.StatusBadRequest, "username is required")
+		return
+	}
+
+	if body.Password == "" {
+		writeErr(w, http.StatusBadRequest, "password is required")
+		return
+	}
+
+	fmt.Println(body)
+	fmt.Fprintln(w, body)
 }
 
 func (ctx context) check(w http.ResponseWriter, r *http.Request) {
@@ -106,7 +200,7 @@ func init() {
 	if err != nil {
 		panic(err)
 	}
-	log.SetOutput(f)
+	log.SetOutput(io.MultiWriter(f, os.Stderr))
 }
 
 func main() {
